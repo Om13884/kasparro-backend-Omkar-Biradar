@@ -1,15 +1,26 @@
+import logging
 from fastapi import FastAPI
 from sqlalchemy import text
 
 from core.db import engine, Base, AsyncSessionLocal
-import logging
-from services.vendor_ingestion import ingest_vendor_data
-from services.csv_ingestion import ingest_csv_data
+
+# FORCE MODEL REGISTRATION (MANDATORY)
+from schemas.run_models import ETLRun
+from schemas.schema_models import SchemaSnapshot
+from schemas.models import (
+    RawAPIData,
+    RawCSVData,
+    UnifiedRecord,
+    IngestionCheckpoint,
+)
+
 from services.api_ingestion import ingest_api_data
+from services.csv_ingestion import ingest_csv_data
+from services.vendor_ingestion import ingest_vendor_data
+from services.stats_service import get_stats
 
 
 logging.basicConfig(level=logging.WARNING)
-
 
 app = FastAPI(
     title="Kasparro Backend & ETL",
@@ -19,13 +30,15 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def startup() -> None:
-    # Create tables
+    # 1. Create ALL tables (ORM models must be imported above)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Run API ingestion
+    # 2. Run ALL ingestions in a single transactional session
     async with AsyncSessionLocal() as session:
         await ingest_api_data(session)
+        await ingest_csv_data(session)
+        await ingest_vendor_data(session)
         await session.commit()
 
 
@@ -43,24 +56,8 @@ async def health() -> dict:
         "database": db_status,
     }
 
-@app.on_event("startup")
-async def startup() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
 
+@app.get("/stats")
+async def stats() -> dict:
     async with AsyncSessionLocal() as session:
-        await ingest_api_data(session)
-        await ingest_csv_data(session)
-        await session.commit()
-
-@app.on_event("startup")
-async def startup() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    async with AsyncSessionLocal() as session:
-        await ingest_api_data(session)
-        await ingest_csv_data(session)
-        await ingest_vendor_data(session)
-        await session.commit()
-
+        return await get_stats(session)
