@@ -2,8 +2,11 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from core.db import engine, Base, AsyncSessionLocal
-from services.api_ingestion import ingest_api_data
 import logging
+from services.vendor_ingestion import ingest_vendor_data
+from services.csv_ingestion import ingest_csv_data
+from services.api_ingestion import ingest_api_data
+
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -39,3 +42,25 @@ async def health() -> dict:
         "status": "ok",
         "database": db_status,
     }
+
+@app.on_event("startup")
+async def startup() -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with AsyncSessionLocal() as session:
+        await ingest_api_data(session)
+        await ingest_csv_data(session)
+        await session.commit()
+
+@app.on_event("startup")
+async def startup() -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with AsyncSessionLocal() as session:
+        await ingest_api_data(session)
+        await ingest_csv_data(session)
+        await ingest_vendor_data(session)
+        await session.commit()
+

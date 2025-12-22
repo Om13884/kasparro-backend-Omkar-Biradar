@@ -1,0 +1,5 @@
+vendor_id,product_name,group,amount
+A1,Desk,FURNITURE,250.50
+A2,Lamp,Furniture,invalid_price
+A3,Mouse,Electronics,29.99
+A4,,Electronics,19.99
