@@ -25,7 +25,7 @@ Production-level structure (Dockerized)
 Testability & automation readiness
 
 🏗️ System Architecture
-                   ┌───────────────────┐
+                                      ┌───────────────────┐
                    │   CoinGecko API   │
                    └─────────┬─────────┘
                              │
@@ -46,6 +46,7 @@ Testability & automation readiness
                   ┌──────────▼──────────┐
                   │ FastAPI Application │
                   └─────────────────────┘
+
 
 🧩 Data Sources
 1️⃣ CoinGecko API (External API)
