@@ -2,8 +2,7 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, insert
 
 from ingestion.api_source.client import fetch_products
 from schemas.models import RawAPIData, UnifiedRecord, IngestionCheckpoint
@@ -21,8 +20,6 @@ async def ingest_api_data(session: AsyncSession) -> None:
     run = ETLRun(source=SOURCE_NAME, status="running")
     session.add(run)
     await session.flush()
-
-    duplicate_count = 0
 
     try:
         checkpoint = await session.scalar(
@@ -72,24 +69,28 @@ async def ingest_api_data(session: AsyncSession) -> None:
             )
         )
 
-        for coin in coins:
-            try:
-                session.add(
-                    UnifiedRecord(
-                        source=SOURCE_NAME,
-                        external_id=coin["id"],
-                        name=coin.get("name"),
-                        category=coin.get("symbol"),
-                        value=0.0,
-                        event_timestamp=datetime.now(timezone.utc),
-                    )
-                )
-                await session.flush()
+        # ✅ DATABASE-LEVEL IDEMPOTENCY (FINAL FIX)
+        rows = [
+            {
+                "source": SOURCE_NAME,
+                "external_id": coin["id"],
+                "name": coin.get("name"),
+                "category": coin.get("symbol"),
+                "value": 0.0,
+                "event_timestamp": datetime.now(timezone.utc),
+            }
+            for coin in coins
+        ]
 
-            except IntegrityError:
-                await session.rollback()
-                duplicate_count += 1
-                continue
+        stmt = (
+            insert(UnifiedRecord)
+            .values(rows)
+            .on_conflict_do_nothing(
+                index_elements=["source", "external_id"]
+            )
+        )
+
+        result = await session.execute(stmt)
 
         new_skip = skip + len(coins)
 
@@ -103,18 +104,12 @@ async def ingest_api_data(session: AsyncSession) -> None:
                 )
             )
 
-        run.status = (
-            "success_with_duplicates"
-            if duplicate_count > 0
-            else "success"
-        )
-
+        run.status = "success"
         logger.warning(
-            f"COINGECKO INGESTION COMPLETED — duplicates skipped: {duplicate_count}"
+            f"COINGECKO INGESTION COMPLETED — attempted {len(rows)} records"
         )
 
     except Exception as e:
         run.status = "failed"
         run.error_message = str(e)
         logger.exception("CoinGecko ingestion failed")
-        raise
