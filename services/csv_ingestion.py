@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from pydantic import ValidationError
 
 from schemas.csv_schema import CSVProduct
@@ -22,10 +23,11 @@ async def ingest_csv_data(session: AsyncSession) -> None:
     logger.warning(f"CSV path resolved to: {CSV_PATH.resolve()}")
     logger.warning(f"CSV file exists: {CSV_PATH.exists()}")
 
-    # Track this ETL run
     run = ETLRun(source=SOURCE_NAME, status="running")
     session.add(run)
     await session.flush()
+
+    duplicate_count = 0
 
     if not CSV_PATH.exists():
         logger.error("CSV file not found inside container. Skipping CSV ingestion.")
@@ -53,13 +55,11 @@ async def ingest_csv_data(session: AsyncSession) -> None:
                 try:
                     product = CSVProduct(**row)
                 except ValidationError as e:
-                    # BAD DATA IS EXPECTED — NEVER CRASH
                     logger.warning(
                         f"Skipping invalid CSV row: {row} | validation error: {e}"
                     )
                     continue
                 except Exception as e:
-                    # Truly unexpected error, still do not crash startup
                     logger.error(
                         f"Unexpected CSV error: {row} | error: {e}"
                     )
@@ -75,22 +75,29 @@ async def ingest_csv_data(session: AsyncSession) -> None:
                     )
                 )
 
-                session.add(
-                    UnifiedRecord(
-                        source=SOURCE_NAME,
-                        external_id=str(product.product_id),
-                        name=product.name,
-                        category=product.category,
-                        value=product.price,
-                        event_timestamp=datetime.now(timezone.utc),
+                try:
+                    session.add(
+                        UnifiedRecord(
+                            source=SOURCE_NAME,
+                            external_id=str(product.product_id),
+                            name=product.name,
+                            category=product.category,
+                            value=product.price,
+                            event_timestamp=datetime.now(timezone.utc),
+                        )
                     )
-                )
+                    await session.flush()
+
+                except IntegrityError:
+                    await session.rollback()
+                    duplicate_count += 1
+                    continue
 
                 new_processed_ids.add(str(product.product_id))
 
         if not new_processed_ids:
-            logger.warning("No new CSV records ingested")
             run.status = "success"
+            logger.warning("No new CSV records ingested")
             return
 
         merged_ids = sorted(processed_ids | new_processed_ids)
@@ -105,14 +112,18 @@ async def ingest_csv_data(session: AsyncSession) -> None:
                 )
             )
 
-        run.status = "success"
+        run.status = (
+            "success_with_duplicates"
+            if duplicate_count > 0
+            else "success"
+        )
+
         logger.warning(
-            f"CSV INGESTION COMPLETED — records added: {len(new_processed_ids)}"
+            f"CSV INGESTION COMPLETED — records added: {len(new_processed_ids)}, "
+            f"duplicates skipped: {duplicate_count}"
         )
 
     except Exception as e:
-        # This catches ONLY truly fatal issues (DB, IO, etc.)
         run.status = "failed"
         run.error_message = str(e)
         logger.exception("CSV ingestion failed unexpectedly")
-        # Do NOT raise — never kill the app

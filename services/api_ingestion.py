@@ -22,6 +22,8 @@ async def ingest_api_data(session: AsyncSession) -> None:
     session.add(run)
     await session.flush()
 
+    duplicate_count = 0
+
     try:
         checkpoint = await session.scalar(
             select(IngestionCheckpoint).where(
@@ -78,11 +80,15 @@ async def ingest_api_data(session: AsyncSession) -> None:
                         external_id=coin["id"],
                         name=coin.get("name"),
                         category=coin.get("symbol"),
-                        value=0.0,  # prices not in /coins/list
+                        value=0.0,
                         event_timestamp=datetime.now(timezone.utc),
                     )
                 )
+                await session.flush()
+
             except IntegrityError:
+                await session.rollback()
+                duplicate_count += 1
                 continue
 
         new_skip = skip + len(coins)
@@ -97,8 +103,15 @@ async def ingest_api_data(session: AsyncSession) -> None:
                 )
             )
 
-        run.status = "success"
-        logger.warning("COINGECKO INGESTION COMPLETED")
+        run.status = (
+            "success_with_duplicates"
+            if duplicate_count > 0
+            else "success"
+        )
+
+        logger.warning(
+            f"COINGECKO INGESTION COMPLETED — duplicates skipped: {duplicate_count}"
+        )
 
     except Exception as e:
         run.status = "failed"
