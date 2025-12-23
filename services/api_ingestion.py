@@ -2,7 +2,8 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 
 from ingestion.api_source.client import fetch_products
 from schemas.models import RawAPIData, UnifiedRecord, IngestionCheckpoint
@@ -29,13 +30,11 @@ async def ingest_api_data(session: AsyncSession) -> None:
         )
 
         skip = int(checkpoint.last_processed_marker) if checkpoint else 0
-
         data = await fetch_products(skip=skip, limit=BATCH_SIZE)
         coins = data.get("coins", [])
 
-        # ---------- Schema Drift Detection ----------
+        # ---------- Schema Drift ----------
         current_schema = extract_schema_signature(data)
-
         snapshot = await session.scalar(
             select(SchemaSnapshot).where(
                 SchemaSnapshot.source == SOURCE_NAME
@@ -45,9 +44,7 @@ async def ingest_api_data(session: AsyncSession) -> None:
         if snapshot:
             diff = diff_schemas(snapshot.schema_signature, current_schema)
             if diff["change_score"] > 0:
-                logger.warning(
-                    f"SCHEMA DRIFT DETECTED for {SOURCE_NAME}: {diff}"
-                )
+                logger.warning(f"SCHEMA DRIFT DETECTED: {diff}")
             snapshot.schema_signature = current_schema
         else:
             session.add(
@@ -56,12 +53,13 @@ async def ingest_api_data(session: AsyncSession) -> None:
                     schema_signature=current_schema,
                 )
             )
-        # -------------------------------------------
+        # ----------------------------------
 
         if not coins:
             run.status = "success"
             return
 
+        # Raw payload storage (ORM is fine here)
         session.add(
             RawAPIData(
                 source=SOURCE_NAME,
@@ -69,7 +67,7 @@ async def ingest_api_data(session: AsyncSession) -> None:
             )
         )
 
-        # ✅ DATABASE-LEVEL IDEMPOTENCY (FINAL FIX)
+        # 🚨 CRITICAL FIX: Core insert ONLY
         rows = [
             {
                 "source": SOURCE_NAME,
@@ -90,7 +88,7 @@ async def ingest_api_data(session: AsyncSession) -> None:
             )
         )
 
-        result = await session.execute(stmt)
+        await session.execute(stmt)
 
         new_skip = skip + len(coins)
 
@@ -105,11 +103,10 @@ async def ingest_api_data(session: AsyncSession) -> None:
             )
 
         run.status = "success"
-        logger.warning(
-            f"COINGECKO INGESTION COMPLETED — attempted {len(rows)} records"
-        )
+        logger.warning("COINGECKO INGESTION COMPLETED")
 
     except Exception as e:
         run.status = "failed"
         run.error_message = str(e)
         logger.exception("CoinGecko ingestion failed")
+        raise

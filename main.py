@@ -18,6 +18,7 @@ from services.api_ingestion import ingest_api_data
 from services.csv_ingestion import ingest_csv_data
 from services.vendor_ingestion import ingest_vendor_data
 from services.stats_service import get_stats
+from services.data_service import fetch_data
 
 
 logging.basicConfig(level=logging.WARNING)
@@ -61,3 +62,11 @@ async def health() -> dict:
 async def stats() -> dict:
     async with AsyncSessionLocal() as session:
         return await get_stats(session)
+@app.get("/data")
+async def get_data(
+    source: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    async with AsyncSessionLocal() as session:
+        return await fetch_data(session, source, limit, offset)
