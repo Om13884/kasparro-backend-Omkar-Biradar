@@ -1,0 +1,6 @@
+product_id,name,category,price,extra_col
+1,Phone,Electronics,699,foo
+2,Laptop,ELECTRONICS,1299,bar
+3,Chair,Furniture,not_a_number,baz
+,Table,Furniture,199,missing_id
+4,Phone,Electronics,699,duplicate

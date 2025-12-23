@@ -23,15 +23,22 @@ services:
     container_name: kasparro-api
     env_file:
       - .env
+    environment:
+      API_BASE_URL: ${API_BASE_URL}
+      API_KEY: ${API_KEY}
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "8000:8000"
+    
+    volumes:
+      - ./data:/app/data
     command: >
       uv run uvicorn main:app
       --host 0.0.0.0
       --port 8000
+
 
 volumes:
   postgres_data:
